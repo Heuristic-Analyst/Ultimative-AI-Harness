@@ -60,6 +60,16 @@ Off whenever the agent opens a sandbox (unless its `sandbox.json` says `"network
 /sandbox            what runs here, and its network
 ```
 
+You can also open and stop sandboxes yourself, though you never have to:
+
+```
+/sandbox open python     open that sandbox for the conversation you are in
+/sandbox stop            stop this conversation's sandbox
+/sandbox stop all        stop every running sandbox, in every conversation
+```
+
+The model is told with your next message what you did.
+
 The agent has no tool for it. It asks you in the chat (and plays a sound, `notify_user`), and is told with your next message that you switched it. Your choice stays through a restart of the sandbox (mounting a folder), and ends when the sandbox is closed.
 
 ## The GPU (`"gpu": true`)
@@ -89,7 +99,7 @@ Nothing installed at runtime survives a stop. If the agent needs a package often
 
 ## When a sandbox ends
 
-- The agent closes it (`close_sandbox`), its conversation is deleted, or the server stops (Ctrl+C, a closed terminal). A sandbox keeps running when you only close a client: the conversation's task may still need it. `/sandbox` shows every conversation that has one.
+- The agent closes it (`close_sandbox`), you stop it (`/sandbox stop`, `/sandbox stop all`), its conversation is deleted, or the server stops (Ctrl+C, a closed terminal). A sandbox keeps running when you only close a client: the conversation's task may still need it. `/sandbox` shows every conversation that has one.
 - The container is deleted with everything in it. **The folders on your computer are never touched** by that.
 - A server that was killed hard can't stop its sandboxes. The next server start removes them first. Containers you started yourself are never touched: the program only removes the ones carrying its own labels.
 

@@ -120,6 +120,9 @@ Anything that doesn't start with `/` is a message to the model.
 | `/stop` | Stop the running task. In the terminal you can't type while the model works: there, **Ctrl+C stops the task**. In the window, the Send button turns into Stop. |
 | `/sandbox` | What runs in this conversation's sandbox (folders, project, network), which other conversations have one running, and every sandbox there is. |
 | `/sandbox net on\|off` | Switch the internet of this conversation's sandbox. It is off whenever the agent opens one. Only you can do this; in the window also while the agent works. The model is told with your next message. |
+| `/sandbox open <name>` | Open that sandbox for this conversation yourself, with the `always` folders. The agent does this on its own too; this is for when you want it ready, or want to pick which one. |
+| `/sandbox stop` | Stop this conversation's sandbox. The container is deleted, its folders stay. |
+| `/sandbox stop all` | Stop every running sandbox, in every conversation. |
 | `/help` | Show the command list. |
 | `/exit`, `/quit` | Leave. Ctrl+C (while nothing works) or Ctrl+D leave too. Everything is saved already, and what is still working goes on in the server. |
 
@@ -236,6 +239,7 @@ Who the assistant is: the start of its system prompt. You write it. If the file 
 │   ├── stepwise-calculation/SKILL.md
 │   ├── sandbox/SKILL.md, projects/SKILL.md, notebook/SKILL.md
 └── Conversations/           # your conversations, created with the first one. never on GitHub
+    ├── last_input.json      #   when you last wrote into each conversation (ms). the window sorts its list by it
     └── <name>/
         ├── state.json       #   what the model carries right now: what /open loads
         ├── log.jsonl        #   every message ever said, one line each. only ever added to
@@ -342,8 +346,8 @@ A client sends **requests**: `{"type": "message", "conversation": "trip", "text"
 | `close` | stop watching one | |
 | `message` | a message for the model | the task's events: `user`, `thinking`, `answer`, `answer_end`, `tool_call`, `tool_result`, `note`, `error`, and `done` last. Or `refused`, if it is still working |
 | `stop` | stop the running task | the task ends with the note `stopped`, then `done` |
-| `list`, `rename`, `delete` | | `list`, `renamed`, `deleted` (the last two go to every client) |
-| `sandbox` | `net` left out: what runs in the conversation's sandbox. `net` `"on"` / `"off"`: switch its network | `sandbox`: the answer as text. A switched network goes to every client that has the conversation open |
+| `list`, `rename`, `delete` | | `list` (every conversation with `busy`, `saved` and `last`: when you last wrote into it, in milliseconds), `renamed`, `deleted` (the last two go to every client) |
+| `sandbox` | nothing more: what runs in the conversation's sandbox. `net` `"on"` / `"off"`: switch its network. `do` `"open"` with `name`, `"stop"`, `"stop_all"`: open or stop sandboxes | `sandbox`: the answer as text. A change goes to every client that has the conversation open |
 
 All of them, with their fields, are listed at the top of `classes/hub.py`.
 

@@ -11,6 +11,9 @@ COMMANDS = {                                         # every command, with what 
     "/stop": "stop the running task (in the terminal: ctrl+c while it works)",   # one line each
     "/sandbox": "this conversation's sandbox (folders, network), and all sandboxes",
     "/sandbox net on|off": "switch its internet on or off (off whenever the agent opens one). only you can",
+    "/sandbox open <name>": "open that sandbox for this conversation yourself (the agent does it too)",
+    "/sandbox stop": "stop this conversation's sandbox. its folders stay",
+    "/sandbox stop all": "stop every running sandbox, in every conversation",
     "/help": "show this list",
     "/exit": "leave the program",
     "/quit": "leave the program (the same as /exit)",
@@ -21,7 +24,7 @@ def help_text():
     """the list of all commands, one per line"""
     lines = ["commands:"]
     for command, what in COMMANDS.items():
-        lines.append("  " + command.ljust(22) + what)   # ljust(22): fill up to 22 characters, so the texts line up
+        lines.append("  " + command.ljust(23) + what)   # ljust(23): fill up to 23 characters, so the texts line up
     return "\n".join(lines)
 
 

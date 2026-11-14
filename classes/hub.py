@@ -26,9 +26,12 @@
 #   list                           answered with "list"
 #   rename   old, new              answered with "renamed", to every client
 #   delete   conversation          answered with "deleted", to every client. its sandbox is stopped
-#   sandbox  conversation, net     net left out: what runs in its sandbox. net "on" / "off": switch its sandbox's
-#                                  network. only a client can do this: no tool of the agent leads here. answered
-#                                  with "sandbox"
+#   sandbox  conversation, and at most one of:        what the USER does with a sandbox. answered with "sandbox"
+#              (nothing)           say what runs in this conversation's sandbox, and everywhere
+#              net: "on" / "off"   switch its network. only a client can: no tool of the agent leads here
+#              do: "open", name    open the sandbox called name for this conversation
+#              do: "stop"          stop this conversation's sandbox
+#              do: "stop_all"      stop every running sandbox, in every conversation
 #
 # EVENTS, what a client gets. {"kind": ..., and its fields}. the ones the agent sends (thinking, answer, answer_end,
 # tool_call, tool_result, note: see classes/agent.py), and the hub's own:
@@ -42,7 +45,8 @@
 #   status   conversation, busy    a conversation started or ended a task. to EVERY client (for their lists)
 #   refused  conversation, text    your message was not taken: the conversation is still working
 #   problem  text                  your request could not be done (no such conversation, a bad name, ...)
-#   list     conversations         [{"name", "busy", "saved"}, ...]
+#   list     conversations         [{"name", "busy", "saved", "last"}, ...]. last: when the user last wrote into
+#                                  it, in milliseconds (Conversations/last_input.json). None: nothing said yet
 #   renamed  old, new, client      to every client
 #   deleted  conversation, client  to every client
 #   sandbox  conversation, text    the answer to a "sandbox" request. a switched network goes to every watcher
@@ -212,8 +216,10 @@ class Hub:
             elif what == "list":
                 saved = conversations.names()
                 names = sorted(set(saved) | set(self.agents))
+                known = conversations.last_inputs()         # when the user last wrote into each one
                 self.tell(client, {"kind": "list", "conversations": [
-                    {"name": n, "busy": n in self.working, "saved": n in saved} for n in names]})
+                    {"name": n, "busy": n in self.working, "saved": n in saved,
+                     "last": conversations.last_input(n, known)} for n in names]})
 
             elif what == "rename":
                 self.rename(client, request.get("old"), request.get("new"))
@@ -222,17 +228,19 @@ class Hub:
                 self.delete(client, name)
 
             elif what == "sandbox":
-                net = request.get("net")
+                net, do = request.get("net"), request.get("do")
                 if not self.workspace:
                     self.problem(client, "there are no sandboxes: podman was not found when the server started. "
                                          "install it (mac/windows: podman machine start), then start the server again")
                 elif name not in self.agents or client not in self.watchers.get(name, ()):
                     self.problem(client, "open the conversation first: every conversation has its own sandbox")
-                elif net not in (None, "on", "off"):
-                    self.problem(client, "usage: /sandbox  or  /sandbox net on|off")
-                else:                                      # in its own thread: podman can take a while (and waits
-                    threading.Thread(target=self.sandbox, args=(client, name, net),   # while the sandbox restarts),
-                                     daemon=True).start()                              # and the hub must stay awake
+                elif net not in (None, "on", "off") or do not in (None, "open", "stop", "stop_all") or (net and do) \
+                        or (do == "open" and not isinstance(request.get("name"), str)):
+                    self.problem(client, "usage: /sandbox  or  /sandbox net on|off  or  /sandbox open <name>  or  "
+                                         "/sandbox stop  or  /sandbox stop all")
+                else:                                      # in its own thread: podman can take a while (building an
+                    threading.Thread(target=self.sandbox,  # image: minutes), and the hub must stay awake
+                                     args=(client, name, net, do, request.get("name")), daemon=True).start()
 
             else:
                 self.problem(client, "unknown request: " + str(what))
@@ -248,6 +256,10 @@ class Hub:
         else:
             agent = self.agents[name]
             agent.stop_requested = False                   # a new task: an old stop request is forgotten
+            try:
+                conversations.touch(name)                  # when you last wrote into it, for the clients' lists
+            except OSError:                                # the list is only sorted by it: never worth losing
+                pass                                       # a message over
             log_size = os.path.getsize(agent.log_file) if os.path.isfile(agent.log_file) else 0
             self.working[name] = {"events": [], "log_size": log_size}   # the log as it is now + these events =
                                                                         # everything, at any moment of the task
@@ -259,23 +271,47 @@ class Hub:
                 text = text + "\n\n" + "\n".join(notes)   # after your own words
             threading.Thread(target=self.work, args=(name, agent, text), daemon=True).start()
 
-    def sandbox(self, client, name, net):
-        """/sandbox, typed by a user in a client. net None: say what runs. "on" / "off": switch the network of this
-        conversation's sandbox. this is the ONLY way the network is ever switched: no tool of the agent can do it"""
+    def sandbox(self, client, name, net, do, kind):
+        """/sandbox, typed by a user in a client. this is the ONLY way the network is ever switched, and the only
+        way anyone but a conversation's own agent opens or stops its sandbox: no tool leads here.
+        net "on" / "off": switch the network of this conversation's sandbox
+        do "open": open the sandbox called kind for this conversation. "stop": stop it. "stop_all": every sandbox
+        neither: say what runs"""
+        everyone = True                                    # a change: everyone who has the conversation open sees it
+        others = []                                        # stop_all: the other conversations that lost a sandbox
         try:
-            if net is None:
-                text = self.workspace.overview(name)
-            else:
+            if net:
                 text = self.workspace.of(name).user_network(net == "on")
+            elif do == "open":
+                text = self.workspace.of(name).user_open(kind)
+            elif do == "stop":
+                stopped = self.workspace.of(name).user_close()
+                text = "stopped " + stopped + ". its folders stay as they are" if stopped else \
+                    "no sandbox runs in this conversation"
+            elif do == "stop_all":
+                stopped = self.workspace.stop_all()
+                text = ("stopped " + str(len(stopped)) + " sandbox(es): "
+                        + ", ".join(kind + " in " + conversation for conversation, kind in stopped)
+                        + ". their folders stay as they are") if stopped else "no sandbox runs anywhere"
+                others = [conversation for conversation, kind in stopped if conversation != name]
+            else:
+                text = self.workspace.overview(name)
+                everyone = False                           # only you asked what runs
         except Exception as e:
             text = "the server could not do that: " + type(e).__name__ + ": " + str(e)
+            everyone = False
         with self.lock:
             event = {"kind": "sandbox", "conversation": name, "text": text}
-            if net is None or client not in self.watchers.get(name, ()):
-                self.tell(client, event)                   # only you asked what runs
+            if everyone and client in self.watchers.get(name, ()):
+                self.to_watchers(name, event)
             else:
-                self.to_watchers(name, event)              # a switched network: everyone who has it open sees it
-                self.say(name + ": sandbox network " + net + " asked by client " + str(client) + " -> " + text)
+                self.tell(client, event)
+            for other in others:                           # who watches a conversation whose sandbox was stopped
+                self.to_watchers(other, {"kind": "sandbox", "conversation": other,
+                                         "text": "this conversation's sandbox was stopped (/sandbox stop all)"})
+            if everyone:
+                self.say(name + ": /sandbox " + (("net " + net) if net else do) + " by client " + str(client)
+                         + " -> " + text.split("\n")[0])
 
     def work(self, name, agent, text):
         """one task, in its own thread: the agent's whole loop, until it has answered. everything it has to say

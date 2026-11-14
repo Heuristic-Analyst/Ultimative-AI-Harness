@@ -309,6 +309,18 @@ class Workspace:
         for sandbox in everyone:
             sandbox.shutdown()
 
+    def stop_all(self):
+        """/sandbox stop all: stop every running sandbox, in every conversation. returns [(conversation, sandbox)].
+        the folders on your computer stay; every model is told with the next message in its conversation"""
+        with self.guard:
+            everyone = list(self.all.values())
+        stopped = []
+        for sandbox in everyone:
+            name = sandbox.user_close()
+            if name:
+                stopped.append((sandbox.conversation, name))
+        return stopped
+
     def overview(self, conversation):
         """/sandbox: what runs in this conversation, what runs in the others, and every sandbox there is"""
         problem = self.unusable()
@@ -588,6 +600,31 @@ class Sandbox:
                               + ("ON: the sandbox can reach the internet now (e.g. pip install)." if on else
                                  "OFF: the sandbox can't reach the internet anymore."))
             return "network " + ("on" if on else "off") + " (until the agent opens a new sandbox, or you switch it)"
+
+    def user_open(self, name):
+        """/sandbox open <name>: you open this conversation's sandbox yourself. the same as the agent's open_sandbox,
+        with the always folders only (the agent mounts what it needs). the model is told with your next message"""
+        answer = self.open(name)
+        if not answer.startswith("running "):
+            return answer.replace(". tell the user", "").replace("close_sandbox first", "/sandbox stop first")
+        self.notes.append(PROGRAM + "The user opened the sandbox " + name + " for you. It runs now, network "
+                          + ("on" if self.network else "off") + ". " + self.where() + ".")
+        return "opened " + name + ", network " + ("on" if self.network else "off") + "\n" + self.status_line()
+
+    def user_close(self):
+        """/sandbox stop: you stop this conversation's sandbox. the model is told with your next message"""
+        with self.lock:
+            here = self.running()
+            if not here:
+                return None                            # nothing ran
+            self.stop()
+            unknown = any("The user opened the sandbox" in note for note in self.notes)   # opened by you, and the
+            self.notes = []                            # model was never told: for it, nothing happened at all.
+            if not unknown:                            # (what you switched in a sandbox that is gone doesn't matter)
+                self.notes.append(PROGRAM + "The user closed the sandbox (" + here + "). Everything inside it is "
+                                  "gone, open notebooks and terminals are closed; the files in the mounted "
+                                  "folders stay.")
+            return here
 
     def take_notes(self):
         """what the user changed with /sandbox since the model's last message, and forget it"""

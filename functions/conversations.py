@@ -8,10 +8,15 @@
 #   Conversations/20261022-21-40-05/checkpoint.md  the model's notes on where it stands, written when the
 #                                                  conversation got too full (tools/basic/checkpoint.py)
 # a new conversation is only written once something was said in it, so there are no empty folders.
+# next to the folders, one file for all of them:
+#   Conversations/last_input.json                  when YOU last wrote into each conversation, in milliseconds:
+#                                                  {"20261022-21-40-05": 1794512405123, ...}. the window sorts its
+#                                                  list by it, the one you used last on top (see touch, last_inputs)
 
 import os
 import re
 import json
+import time
 import shutil
 import datetime
 from config import CONVERSATIONS_DIR
@@ -19,6 +24,9 @@ from functions.read_json import read_json
 
 NAME = r"[A-Za-z0-9][A-Za-z0-9._-]*"                    # what a name may look like: letters, digits, - _ .
                                                         # and no / \ or .. : so it can never point outside the folder
+
+
+LAST_INPUT_FILE = os.path.join(CONVERSATIONS_DIR, "last_input.json")   # a file, not a folder: never a conversation
 
 
 def folder_of(name):
@@ -95,6 +103,57 @@ def load(name):
     return read_json(state_of(name))
 
 
+def last_inputs():
+    """when the user last wrote into each conversation: name -> milliseconds since 1970. a missing or broken file:
+    nothing is known (the list then falls back to when each log was last written, see last_input)"""
+    try:
+        with open(LAST_INPUT_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_last_inputs(data):
+    os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
+    temporary = LAST_INPUT_FILE + ".saving"             # first into a temporary file, then swapped in, like state.json
+    with open(temporary, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1)
+    os.replace(temporary, LAST_INPUT_FILE)
+
+
+def touch(name):
+    """the user just wrote into this conversation: remember when, to the millisecond. returns that time"""
+    now = int(time.time() * 1000)
+    data = last_inputs()
+    data[name] = now
+    write_last_inputs(data)
+    return now
+
+
+def last_input(name, known=None):
+    """when the user last wrote into this conversation, in milliseconds. not written down (a conversation from
+    before this file existed): when its log was last added to. nothing at all: None.
+    known: last_inputs(), if the caller has it already (so the file is read once for a whole list)"""
+    known = last_inputs() if known is None else known
+    if isinstance(known.get(name), (int, float)):
+        return int(known[name])
+    for file in (log_of(name), state_of(name)):
+        if os.path.isfile(file):
+            return int(os.path.getmtime(file) * 1000)
+    return None
+
+
+def forget_input(name, new=None):
+    """a conversation was deleted (new None) or renamed (to new): its line in last_input.json goes with it"""
+    data = last_inputs()
+    if name in data:
+        value = data.pop(name)
+        if new:
+            data[new] = value
+        write_last_inputs(data)
+
+
 def rename(old, new):
     """rename a saved conversation's folder. returns None if it worked, otherwise what is wrong"""
     problem = name_problem(new)
@@ -105,6 +164,7 @@ def rename(old, new):
     if exists(new):
         return "a conversation called '" + new + "' exists already"
     os.rename(folder_of(old), folder_of(new))
+    forget_input(old, new)                              # its time goes with it, under the new name
     return None
 
 
@@ -113,4 +173,5 @@ def delete(name):
     if name_problem(name) or not exists(name):          # name_problem first: a name like ../x is never deleted
         return "no conversation called '" + name + "'. /list shows them"
     shutil.rmtree(folder_of(name))                      # the folder and everything in it. there is no undo
+    forget_input(name)
     return None

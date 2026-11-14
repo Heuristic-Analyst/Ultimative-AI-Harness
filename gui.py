@@ -60,6 +60,9 @@ HELP = """commands:
   /stop                  stop the running task (the same as the Stop button)
   /sandbox               this conversation's sandbox (folders, network), and all sandboxes
   /sandbox net on|off    switch its internet on or off. only you can, also while the agent works
+  /sandbox open <name>   open that sandbox for this conversation yourself (the agent does it too)
+  /sandbox stop          stop this conversation's sandbox. its folders stay
+  /sandbox stop all      stop every running sandbox, in every conversation
   /help                  show this list
   /exit                  close the window (what is working goes on in the server)
 click the three dots of a conversation on the left (or right-click it) to rename or delete it. click a ▸ line to open the thinking or a tool call."""
@@ -515,11 +518,15 @@ class Gui:
 
     # --- the list on the left ---
     def fill_list(self, conversations):
-        """draw the list again: the newest on top, a dot in front of the ones that work"""
+        """draw the list again: the one you wrote into last on top, a dot in front of the ones that work"""
         self.working = {c["name"] for c in conversations if c["busy"]}
         self.picking = True                          # deleting the lines "unselects": that is not you picking
         self.list.delete(*self.list.get_children())
-        for c in reversed(conversations):            # the names start with their time: reversed = the newest first
+        ordered = sorted(conversations, key=lambda c: c["name"], reverse=True)   # same time: the newer name first
+        ordered.sort(key=lambda c: (c["saved"], -(c.get("last") or 0)))   # then by when you last wrote into it
+                                                     # ("last", from Conversations/last_input.json), newest first.
+                                                     # a new one, with nothing said yet (not saved), is on top
+        for c in ordered:
             self.list.insert("", "end", iid=c["name"], text=("●  " if c["busy"] else "    ") + c["name"],
                              values=(DOTS,), tags=("working",) if c["busy"] else ())
         self.picking = False
@@ -645,6 +652,13 @@ class Gui:
             self.server.send("sandbox", conversation=self.current)
         elif command == "/sandbox" and len(words) == 3 and words[1] == "net" and words[2] in ("on", "off"):
             self.server.send("sandbox", conversation=self.current, net=words[2])
+        elif command == "/sandbox" and len(words) == 3 and words[1] == "open":
+            self.note("opening " + words[2] + " ... (the first time builds its image, which can take minutes)")
+            self.server.send("sandbox", conversation=self.current, do="open", name=words[2])
+        elif command == "/sandbox" and words[1:] == ["stop"]:
+            self.server.send("sandbox", conversation=self.current, do="stop")
+        elif command == "/sandbox" and words[1:] == ["stop", "all"]:
+            self.server.send("sandbox", conversation=self.current, do="stop_all")
         elif command == "/help":
             self.note(HELP)
         else:

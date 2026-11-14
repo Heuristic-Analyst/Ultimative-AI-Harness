@@ -65,6 +65,17 @@ def wait_for(*kinds):
             return event
 
 
+def sandbox_request(words):
+    """what /sandbox ... asks the server for. words: what you typed, already checked (functions/commands.py)"""
+    if len(words) == 1:                              # /sandbox: what runs
+        return {}
+    if words[1] == "net":                            # /sandbox net on|off. only you can: the agent has no tool for it
+        return {"net": words[2]}
+    if words[1] == "open":                           # /sandbox open <name>
+        return {"do": "open", "name": words[2]}
+    return {"do": "stop_all" if len(words) == 3 else "stop"}   # /sandbox stop, /sandbox stop all
+
+
 def new_conversation():
     """ask the server for a new conversation, and go into it"""
     global current
@@ -184,11 +195,10 @@ if __name__ == "__main__":                           # runs only when you start 
                 if answer is not None:
                     handle(answer)
 
-            elif what == "sandbox":                  # /sandbox, or /sandbox net on|off: the server does it, for
-                if len(words) == 3:                  # this conversation's sandbox. only you can switch the network:
-                    server.send("sandbox", conversation=current, net=words[2])   # the agent has no tool for it
-                else:
-                    server.send("sandbox", conversation=current)
+            elif what == "sandbox":                  # /sandbox ...: the server does it, for this conversation's
+                server.send("sandbox", conversation=current, **sandbox_request(words))   # sandbox (or, stop all,
+                if words[1:2] == ["open"]:           # for every one)
+                    print("[opening " + words[2] + " ... the first time builds its image, which can take minutes]")
                 wait_for("sandbox", "problem")       # both are printed by handle
 
             elif what == "message":

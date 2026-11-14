@@ -13,6 +13,12 @@ Conversations/
         └── results-2.json
 ```
 
+Next to the folders there is one file for all of them, `last_input.json`: when you last wrote into each conversation, in milliseconds since 1970. The server writes it with every message you send, and keeps it in step when a conversation is renamed or deleted. The window sorts its list by it, the one you used last on top. A conversation that isn't in it yet (from before the file existed) counts by when its log was last written.
+
+```json
+{"20261024-01-10-05": 1794679673659, "trip-planning": 1794679673468}
+```
+
 The code for all of this is in `functions/conversations.py` (the folders and `state.json`), `functions/results.py` (`results/`), `classes/agent.py` (the log) and `tools/basic/checkpoint.py` (`checkpoint.md`).
 
 ## The files
