@@ -49,6 +49,7 @@ COLUMN = 820                                         # how wide the text of a co
                                                      # window it stays in the middle, so lines stay readable
 TEXT_FONTS = ["Segoe UI", "SF Pro Text", "Helvetica Neue", "Inter", "Noto Sans", "Ubuntu", "DejaVu Sans"]
 CODE_FONTS = ["Cascadia Code", "SF Mono", "Menlo", "JetBrains Mono", "Consolas", "DejaVu Sans Mono", "Courier New"]
+DOTS = "\u00b7\u00b7\u00b7"                            # the three dots at the right of every conversation in the list
 HINT = "Enter sends  ·  Shift+Enter makes a new line  ·  /help shows the commands"
 HELP = """commands:
   /new                   start a new conversation
@@ -61,7 +62,7 @@ HELP = """commands:
   /sandbox net on|off    switch its internet on or off. only you can, also while the agent works
   /help                  show this list
   /exit                  close the window (what is working goes on in the server)
-right-click a conversation on the left to rename or delete it. click a ▸ line to open the thinking or a tool call."""
+click the three dots of a conversation on the left (or right-click it) to rename or delete it. click a ▸ line to open the thinking or a tool call."""
 
 
 def first_font(wanted, fallback):
@@ -335,10 +336,14 @@ class Gui:
         self.button(side, "+  New conversation", self.new, C["accent"], C["on_accent"]).pack(fill="x", padx=14)
         tk.Label(side, text="CONVERSATIONS", bg=C["side"], fg=C["faint"], font=self.fonts["tiny"],
                  anchor="w").pack(fill="x", padx=18, pady=(18, 4))
-        self.list = ttk.Treeview(side, style="Side.Treeview", show="tree", selectmode="browse")
-        self.list.pack(fill="both", expand=True, padx=(6, 6), pady=(0, 10))
+        self.list = ttk.Treeview(side, style="Side.Treeview", show="tree", selectmode="browse", columns=("more",))
+        self.list.column("#0", stretch=True)         # the name: takes all the room there is
+        self.list.column("more", width=34, minwidth=34, stretch=False, anchor="center")   # the three dots at the
+        self.list.pack(fill="both", expand=True, padx=(6, 6), pady=(0, 10))               # right of every line
         self.list.tag_configure("working", foreground=C["accent"])
         self.list.bind("<<TreeviewSelect>>", self.picked)
+        self.list.bind("<Button-1>", self.list_click)    # a click on the three dots: the menu (rename, delete)
+        self.list.bind("<Motion>", self.list_hover)      # a hand over the dots, so they look like a button
         self.list.bind("<Button-3>", self.list_menu)     # right click (windows, linux)
         self.list.bind("<Button-2>", self.list_menu)     # right click on some macs
         tk.Frame(self.root, bg=C["line"], width=1).pack(side="left", fill="y")   # a thin line next to the list
@@ -516,7 +521,7 @@ class Gui:
         self.list.delete(*self.list.get_children())
         for c in reversed(conversations):            # the names start with their time: reversed = the newest first
             self.list.insert("", "end", iid=c["name"], text=("●  " if c["busy"] else "    ") + c["name"],
-                             tags=("working",) if c["busy"] else ())
+                             values=(DOTS,), tags=("working",) if c["busy"] else ())
         self.picking = False
         self.pick_in_list()
 
@@ -544,8 +549,25 @@ class Gui:
         else:
             self.server.send("open", conversation=name)   # answered with "opened", which shows it
 
+    def on_dots(self, event):
+        """the conversation whose three dots the mouse is on, or None"""
+        if self.list.identify_column(event.x) != "#1":   # "#1" = the first column after the name: the dots
+            return None
+        return self.list.identify_row(event.y) or None
+
+    def list_hover(self, event):
+        self.list.configure(cursor="hand2" if self.on_dots(event) else "")
+
+    def list_click(self, event):
+        """a click in the list. on a line's three dots: its menu, and the line is not opened. anywhere else: nothing
+        here, the list picks the line itself (see picked)"""
+        if self.on_dots(event):
+            self.list_menu(event)
+            return "break"                           # "break" = the list doesn't also select the line
+        return None
+
     def list_menu(self, event):
-        """right click on a conversation: rename or delete it"""
+        """the three dots of a conversation, or a right click on it: rename or delete it"""
         name = self.list.identify_row(event.y)
         if not name:
             return
