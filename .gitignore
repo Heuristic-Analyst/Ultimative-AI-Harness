@@ -7,3 +7,9 @@ Conversations/*
 
 # python's cache files
 __pycache__/
+
+# what the agents make in Shared Folder (Common and the projects): yours, not GitHub's. only the notebook engine and
+# the README are part of the program, so they stay
+Shared Folder/*
+!Shared Folder/Notebook_Engine/
+!Shared Folder/README.md
