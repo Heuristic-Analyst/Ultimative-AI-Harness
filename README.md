@@ -19,6 +19,10 @@ It talks to any model through [LiteLLM](https://github.com/BerriAI/litellm), can
 - **Long results.** A tool result that is too long is saved in parts. The model gets a preview, and reads or searches the rest (`read_result`, `search_result`).
 - **Checkpoints.** When a conversation gets too full, the model writes down where it stands, and the conversation starts fresh from those notes.
 - **Retries.** A busy or unreachable provider is tried again, waiting longer each time.
+- **Sandboxes.** Every conversation has its own throwaway Linux container (Podman), opened and closed by its agent. Everything the agent runs happens in there: commands, installs, terminals that stay open, Jupyter notebooks. Nothing is ever run on your computer.
+- **Folders you choose.** A sandbox sees only the folders you name in `settings/folders.json`, each read-only or read-write: some in every sandbox, some the agent can mount (one sandbox at a time, or shared), and one project out of your projects folder.
+- **The network is yours.** It is off whenever a sandbox opens. Only you switch it: `/sandbox net on|off`.
+- **A sound when it needs you.** `notify_user` calls you back when the agent has to stop for something only you can do.
 
 ## How it fits together
 
@@ -32,13 +36,18 @@ It talks to any model through [LiteLLM](https://github.com/BerriAI/litellm), can
 - **`classes/hub.py`**: the layer in between. Clients send it **requests** (open this conversation, here is a message, stop it), agents send it **events** (a piece of the answer, a tool call, a tool result). It passes every event of a conversation on to the clients that have that conversation open. It starts one thread per working conversation, refuses a message for a conversation that is still working, and saves the conversation to `state.json` after every task, also a failed one.
 - **`main.py`** and **`gui.py`**: clients. They hold no agent and call no model. `main.py` prints the events the way the program always printed (`classes/printer.py`); `gui.py` draws them in a window, with markdown (`functions/markdown.py`). Both talk to the server through `classes/connection.py`.
 - **`classes/agent.py`**: the heart of the program. `ask()` is the loop: call the model, add its answer to the conversation, run the tools it asked for, and go again until it answers without tools. `call_model()` tries again on errors that may go away by themselves (3 times, after 1, 2 and 4 seconds). The agent never prints: everything it has to say goes as an event to `agent.output`, a function the hub gave it. `agent.stop_requested` is how the hub stops a running task.
-- **The system prompt**: built fresh from three parts, always in this order: `Ego/SOUL.md`, the skills menu, `checkpoint.md`. It is never saved in `state.json`. The same order always gives the same text, so the provider's prompt cache stays valid.
+- **The system prompt**: built fresh from four parts, always in this order: `Ego/SOUL.md`, the skills menu, `checkpoint.md`, and what runs in the conversation's sandbox. It is never saved in `state.json`. The same order always gives the same text, so the provider's prompt cache stays valid.
 - **Tools**: one file each in `tools/`, with `TOOL` (what the model sees) and `run(agent, **args)` (what the program does). They are found at the start, with no list to edit. All tool calls of one answer run at the same time, each in its own thread. Their results go back in the order the model asked, each with its call's id. Any problem comes back as a text starting with `error:`, so every call always gets an answer.
 - **Skills**: only the name and description of each `SKILL.md` are in the system prompt. When a task matches, the model calls `load_skill` and gets the whole text back as a tool result. No skills: no `load_skill` either.
 - **Long results**: a tool result longer than 8,000 characters is saved in 4,000-character parts as `results/results-<n>.json`. The model gets a preview with the start, the end and the number of parts. It reads one part with `read_result`, or finds lines with `search_result`, a grep with grep's options (`-E -i -w -v -A -B -o -c -m`). If a search answer is too long itself, it is saved as a new result.
 - **Checkpoints**: the conversation's size comes from the token count the provider sends with every answer. A task that ended above 60% of `ContextLimit` gets a checkpoint request. Above 80% in the middle of a task, an emergency request comes right after the tool results. The model writes its notes in fixed sections (Goal, Decisions, Facts, Done, Failed, Open, Files, Last exchange) and gives them to the `checkpoint` tool. The tool saves `checkpoint.md`, empties the conversation, and builds the system prompt again with the checkpoint in it. The tool refuses when nobody asked, and the program asks at most twice per task.
 - **Saving**: every conversation is a folder. `state.json` is what the model carries right now, written to a temporary file first and then swapped in. `log.jsonl` gets every message ever said, and the system prompt whenever it changed. It is only ever added to, and the program never reads it.
+- **Sandboxes** (`classes/sandbox.py`): one `Workspace` for the server, and one `Sandbox` per conversation, which the agent gets as `agent.sandbox`. The tools in `tools/sandbox/` and `tools/notebook/` only call it. It builds the image from `Sandboxes/<name>/Containerfile`, starts a container that is deleted when it stops, mounts the folders from `settings/folders.json`, and keeps track of who has which exclusive folder, project and notebook. A sandbox stays until its agent closes it, its conversation is deleted, or the server stops. See `Sandboxes/README.md` and `settings/README.md`.
 - **Safety**:
+  - The agent runs nothing on your computer. Every command goes into its own rootless Podman container: no new privileges, limits on memory, CPUs and processes, none of your environment variables, no open ports. No sandbox starts if Podman runs with root rights.
+  - A sandbox sees only the folders in `settings/folders.json`. Each is mounted `nosuid,nodev`, read-only where you say so. The program's own folders, your home folder, and anything above them are refused, and one mistake in the file stops every sandbox from starting.
+  - The program never runs or opens what the agent wrote into those folders. On your side it only creates, renames and deletes project folders.
+  - The network of a sandbox is off unless you switch it on. No tool can.
   - `calculate` only accepts digits and math symbols, and runs in its own isolated Python process (`-I`) that is stopped after 5 seconds.
   - Conversation, result and time zone names are checked against a pattern, so the model can never point the program at another folder or file.
   - The API key is read from `.env`, but never put into the environment.
@@ -47,6 +56,7 @@ It talks to any model through [LiteLLM](https://github.com/BerriAI/litellm), can
 
 - Python 3.10 or newer
 - An API key for your model provider (not needed for local models such as Ollama)
+- [Podman](https://podman.io), rootless, for the sandboxes (mac and windows: `podman machine start` once). Without it everything else still works: the sandbox and notebook tools and their skills are simply left out.
 
 ## Quick start
 
@@ -108,6 +118,8 @@ Anything that doesn't start with `/` is a message to the model.
 | `/rename <old> <new>` | Rename a saved conversation, also the one you are in. |
 | `/delete <name>` | Delete a conversation with everything in it. Asks first: type `yes`. |
 | `/stop` | Stop the running task. In the terminal you can't type while the model works: there, **Ctrl+C stops the task**. In the window, the Send button turns into Stop. |
+| `/sandbox` | What runs in this conversation's sandbox (folders, project, network), which other conversations have one running, and every sandbox there is. |
+| `/sandbox net on\|off` | Switch the internet of this conversation's sandbox. It is off whenever the agent opens one. Only you can do this; in the window also while the agent works. The model is told with your next message. |
 | `/help` | Show the command list. |
 | `/exit`, `/quit` | Leave. Ctrl+C (while nothing works) or Ctrl+D leave too. Everything is saved already, and what is still working goes on in the server. |
 
@@ -135,6 +147,21 @@ In the window, also: click a conversation on the left to open it, right-click it
 | `PrintThinking` | `true` = the model's thinking is shown too, not only its answer (in the terminal; the window always has it, folded). It is always kept in the conversation and the log. Default `false`. |
 | `ContextLimit` | Tokens a conversation may have at most. **Set it to your model's real context window, or below.** Default 100,000. |
 
+### `settings/folders.json`
+
+The only folders of your computer a sandbox can see. Each has a `name` (it appears at `/workspace/<name>`), a `path` (absolute, or relative to the program's folder) and an `access`: `"ro"` or `"rw"`. `settings/README.md` has all of it.
+
+| Key | What it is |
+|---|---|
+| `always` | In every sandbox, from its start. Any number of sandboxes at once. `Common` and the read-only `Notebook_Engine` are here. |
+| `exclusive` | The agent can mount them. One sandbox at a time. |
+| `shared` | The agent can mount them. Any number of sandboxes at once. |
+| `projects` | One path: the folder that holds the projects. Never mounted itself: a sandbox mounts one project out of it, read-write, one sandbox per project. Left out: no projects, and nothing creates that folder. |
+
+### `Sandboxes/<name>/sandbox.json`
+
+Optional, next to a sandbox's `Containerfile`. Only these keys: `_about` (a note for you), `memory` (`"8g"`), `gpu` (`true`/`false`), `network` (`true` = on when the agent opens it). Anything else makes that sandbox unusable until it is fixed. See `Sandboxes/README.md`.
+
 ### `config.py`
 
 | Setting | Default | Meaning |
@@ -146,6 +173,11 @@ In the window, also: click a conversation on the left to open it, right-click it
 | `RESULT_LIMIT` | `8_000` | A tool result longer than this (in characters) is saved in parts, and the model gets a preview. |
 | `RESULT_PART` | `4_000` | The size of each saved part, in characters. Must be at least 500 smaller than `RESULT_LIMIT`. |
 | `RESULT_PREVIEW` | `300` | How many characters of a saved result's start, and of its end, are in the preview. |
+| `CONTAINER_CMD` | `podman` | The container program. |
+| `SANDBOX_ROOTLESS_ONLY` | `True` | No sandbox starts when Podman runs with root rights. `False` only for a Podman machine you set up rootful on purpose. |
+| `SANDBOX_MEMORY`, `SANDBOX_CPUS`, `SANDBOX_PIDS` | `2g`, `2`, `2048` | The limits of a sandbox. Memory can be set per sandbox in its `sandbox.json`. |
+| `COMMAND_TIMEOUT` | `600` | Seconds a command in a sandbox may run before it is stopped. |
+| `NOTEBOOK_ENGINE` | `Notebook_Engine` | The name, in `folders.json`, of the folder with the notebook engine. The `nb_*` tools find it by this name. |
 
 All folders and files are defined in `config.py` too. To move or rename one, change it there.
 
@@ -167,27 +199,42 @@ Who the assistant is: the start of its system prompt. You write it. If the file 
 │   ├── agent.py             # the Agent: the model calls, the tool loop, the events, the log, checkpoints, stopping
 │   ├── hub.py               # the Hub: the layer between clients and agents. who gets which event
 │   ├── connection.py        # the Connection: how a client talks to the server
-│   └── printer.py           # the Printer: shows events in a terminal (main.py)
+│   ├── printer.py           # the Printer: shows events in a terminal (main.py)
+│   ├── sandbox.py           # the Workspace and the Sandbox: every conversation's own podman container
+│   └── terminal.py          # the Terminal: a shell that stays open inside a sandbox
 ├── functions/               # small helpers, mostly one job each
 │   ├── commands.py          #   what you typed: a message, or which command
 │   ├── conversations.py     #   the conversation folders: save, load, list, rename, delete
 │   ├── history.py           #   a conversation's log as events, for a client that opens it
 │   ├── markdown.py          #   markdown as pieces the window can draw
 │   ├── results.py           #   long tool results: save in parts, preview, load
+│   ├── folders.py           #   settings/folders.json: which folders a sandbox may see, checked
 │   ├── load_tools.py        #   find and load every tool in tools/
 │   ├── load_skills.py       #   find every skill in skills/
 │   ├── read_front_matter.py #   the header of a SKILL.md
 │   ├── read_json.py, read_text.py, write_text.py
 │   └── environment.py       #   the API key from .env
 ├── settings/
-│   └── model.json           # which model, and how to talk to it
+│   ├── model.json           # which model, and how to talk to it
+│   └── folders.json         # the only folders of your computer a sandbox can see
+├── Sandboxes/               # one folder per sandbox: a Containerfile, and optionally a sandbox.json
+│   ├── python/, ubuntu/, ai-lab/
+├── Shared Folder/           # the folders the default folders.json points to
+│   ├── Notebook_Engine/     #   the notebook engine (kernel.py, client.py): in every sandbox, read-only
+│   ├── Common/              #   in every sandbox, read-write. made when first needed. never on GitHub
+│   └── Projects/            #   the projects folder. made when first needed. never on GitHub
 ├── Ego/
 │   └── SOUL.md              # who the assistant is
 ├── tools/                   # one file per tool (tools/README.md explains how to write one)
-│   ├── basic/               #   calculate, get_time, load_skill, checkpoint
-│   └── results/             #   read_result, search_result
+│   ├── basic/               #   calculate, get_time, load_skill, checkpoint, notify_user
+│   ├── results/             #   read_result, search_result
+│   ├── sandbox/             #   check_sandbox, open_sandbox, close_sandbox, sandbox_shell, terminal, close_terminal,
+│   │                        #   mount_folder, unmount_folder, check_projects, create_project, mount_project,
+│   │                        #   unmount_project, rename_project, delete_project
+│   └── notebook/            #   nb_create, nb_open, nb_close, nb_add, nb_edit, nb_remove, nb_run, nb_rerun, nb_show
 ├── skills/                  # one folder per skill (skills/README.md explains how to write one)
-│   └── stepwise-calculation/SKILL.md
+│   ├── stepwise-calculation/SKILL.md
+│   ├── sandbox/SKILL.md, projects/SKILL.md, notebook/SKILL.md
 └── Conversations/           # your conversations, created with the first one. never on GitHub
     └── <name>/
         ├── state.json       #   what the model carries right now: what /open loads
@@ -296,6 +343,7 @@ A client sends **requests**: `{"type": "message", "conversation": "trip", "text"
 | `message` | a message for the model | the task's events: `user`, `thinking`, `answer`, `answer_end`, `tool_call`, `tool_result`, `note`, `error`, and `done` last. Or `refused`, if it is still working |
 | `stop` | stop the running task | the task ends with the note `stopped`, then `done` |
 | `list`, `rename`, `delete` | | `list`, `renamed`, `deleted` (the last two go to every client) |
+| `sandbox` | `net` left out: what runs in the conversation's sandbox. `net` `"on"` / `"off"`: switch its network | `sandbox`: the answer as text. A switched network goes to every client that has the conversation open |
 
 All of them, with their fields, are listed at the top of `classes/hub.py`.
 
@@ -344,6 +392,7 @@ It is built from parts, always in the same order, and is always the first messag
 1. the soul (`Ego/SOUL.md`)
 2. the skills menu: every skill's name and its one-line description
 3. the checkpoint, once there is one
+4. the workspace: what runs in the conversation's sandbox right now, what is mounted, and which sandboxes, folders and projects there are (only with Podman)
 
 The same parts always give exactly the same text, so the provider's prompt cache stays valid. It is not saved in `state.json`: when a conversation is opened again, it gets a freshly built one, so a changed soul or a new skill is used right away. The log keeps every version of it.
 

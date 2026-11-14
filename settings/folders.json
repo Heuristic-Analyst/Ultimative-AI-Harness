@@ -1,0 +1,14 @@
+{
+  "_about": "the ONLY folders of your computer a sandbox can ever see. you write this file; the agent can't change it. every folder has a name (it is mounted at /workspace/<name>), a path (absolute, or relative to the program's folder) and an access: \"ro\" (read-only) or \"rw\" (read and write). see settings/README.md",
+
+  "always": [
+    {"name": "Common", "path": "Shared Folder/Common", "access": "rw"},
+    {"name": "Notebook_Engine", "path": "Shared Folder/Notebook_Engine", "access": "ro"}
+  ],
+
+  "exclusive": [],
+
+  "shared": [],
+
+  "projects": "Shared Folder/Projects"
+}

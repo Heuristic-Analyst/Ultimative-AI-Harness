@@ -5,6 +5,8 @@
 | `agent.py` | The `Agent`: one conversation with one model. It sends the conversation to the model, runs the tools, logs every message, asks for checkpoints, and says everything that happens as events. |
 | `hub.py` | The `Hub`: the layer between the clients and the agents. It holds the agents of the conversations in use, runs each task in its own thread, and passes every event on to the clients that have that conversation open. Every request and event is listed at its top. |
 | `connection.py` | The `Connection`: how a client talks to the server. `send(type, ...)` sends one request, `next(timeout)` gives the next event. |
+| `sandbox.py` | The `Workspace` (one for the server: Podman, `Sandboxes/`, `settings/folders.json`, and who has which folder, project and notebook) and the `Sandbox` (one per conversation: its container, and everything the sandbox and notebook tools do with it). |
+| `terminal.py` | The `Terminal`: one bash that stays open inside a sandbox, for the `terminal` tool. |
 | `printer.py` | The `Printer`: shows events in a terminal, the way the program always printed (`THINKING:`, `ANSWER:`, `TOOL CALL: ...`). Used by `main.py`. |
 
 `server.py` writes `new_agent`, and the hub calls it to make one `Agent` per conversation. For every message a client sends, the hub calls `agent.ask(text)` in a thread of its own. Everything the agent needs comes in as a parameter, so `agent.py` itself knows nothing about folders, files, servers or clients.
@@ -40,6 +42,7 @@ agent = Agent(MODEL, API_KEY, instructions=soul, stream=STREAM, effort=EFFORT,
 | `results_dir` | where long tool results are saved (`results/`) | long results are given whole |
 | `checkpoint_file` | where the checkpoint is (`checkpoint.md`) | no checkpoints |
 | `context_limit` | tokens the conversation may have | no checkpoints are asked for |
+| `sandbox` | this conversation's own `Sandbox` (`workspace.of(name)`): what its sandbox and notebook tools use | no sandbox, and no workspace in the system prompt |
 | `output` | where every event goes: a function that takes one event (a dict) | the agent says nothing |
 | `name` | the conversation's name, written on every event | `None` |
 

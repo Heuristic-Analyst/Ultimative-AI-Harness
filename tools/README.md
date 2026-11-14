@@ -8,8 +8,19 @@ Everything the agent can *do* is a tool, and every tool is one Python file in he
 | `get_time` | `basic/get_time.py` | The current date, time (with milliseconds) and weekday: the user's own, or of any time zone by its IANA name (`Europe/Berlin`). The model has no clock, so it asks this whenever "today" matters. |
 | `load_skill` | `basic/load_skill.py` | Returns the full instructions of a skill (`skills/<name>/SKILL.md`) by its name. Taken away from the model when there are no skills. |
 | `checkpoint` | `basic/checkpoint.py` | Saves the model's checkpoint as `checkpoint.md`, empties the conversation and puts the checkpoint into the system prompt. Only works when the program asked for it: when the conversation got too full (`CHECKPOINT_AT`, `EMERGENCY_AT` in `config.py`). The log and the saved results stay. |
+| `notify_user` | `basic/notify_user.py` | Plays a sound on your computer (the server plays it) and puts a note into the chat, when the agent has to stop before the task is done because it needs you. |
 | `read_result` | `results/read_result.py` | Shows **one** part of a saved result (see "Long results" below). Never more than one, so a huge result can't fill the context. |
 | `search_result` | `results/search_result.py` | `grep` for one saved result: every matching line with its part and line number. With grep's options: regex, ignore case, whole word, invert, lines before/after, only the matched piece, count, max count. |
+
+The sandbox tools (`sandbox/`) and the notebook tools (`notebook/`) only work with Podman. Their logic is in `classes/sandbox.py`; each file here is a few lines that call `agent.sandbox`:
+
+| Tools | What they do |
+|---|---|
+| `check_sandbox`, `open_sandbox`, `close_sandbox` | Look at the sandboxes and folders; start and stop this conversation's own sandbox. |
+| `sandbox_shell`, `terminal`, `close_terminal` | Run a command inside it: in a fresh shell, or in one that stays open. |
+| `mount_folder`, `unmount_folder` | Mount or unmount one of the folders `settings/folders.json` allows. |
+| `check_projects`, `create_project`, `mount_project`, `unmount_project`, `rename_project`, `delete_project` | The projects in your projects folder. One project per sandbox. |
+| `nb_create`, `nb_open`, `nb_close`, `nb_add`, `nb_edit`, `nb_remove`, `nb_run`, `nb_rerun`, `nb_show` | Jupyter notebooks, run by the engine in the read-only folder `Notebook_Engine` (`notebook/_notebook.py`). |
 
 ## How a tool file looks
 
@@ -115,4 +126,5 @@ An answer from `search_result` that is too long is saved as a new result too. Th
 - **Tools run in parallel.** Two calls of the same tool can run at the same time. If a tool changes something shared (a file, a variable), make sure two runs at once can't get in each other's way.
 - **Keep results short.** Every result is sent to the model again with every later call. A tool that returns a whole file fills the conversation fast: return what matters, or a summary.
 - **Things that can hang get a time limit**, like the 5 seconds in `calculate.py`. Otherwise the agent waits forever.
-- **Every agent gets every tool** in this folder, for now.
+- **Every agent gets every tool** in this folder, for now. (Exception: without Podman, the `sandbox/` and `notebook/` folders are left out.)
+- **Run nothing on the user's computer.** A tool that needs to run code passes it to `agent.sandbox.exec(...)`, like `sandbox_shell` does. `agent.sandbox` is the calling conversation's own sandbox, never another one.

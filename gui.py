@@ -57,6 +57,8 @@ HELP = """commands:
   /rename <new>          rename this conversation.  /rename <old> <new>: another one
   /delete [name]         delete this conversation, or the one named, with everything in it
   /stop                  stop the running task (the same as the Stop button)
+  /sandbox               this conversation's sandbox (folders, network), and all sandboxes
+  /sandbox net on|off    switch its internet on or off. only you can, also while the agent works
   /help                  show this list
   /exit                  close the window (what is working goes on in the server)
 right-click a conversation on the left to rename or delete it. click a ▸ line to open the thinking or a tool call."""
@@ -444,6 +446,9 @@ class Gui:
             self.server.send("list")
         elif kind == "problem":                      # a request that could not be done: the server says why
             self.note(event["text"])
+        elif kind == "sandbox":                      # the answer to /sandbox, or someone switched the network
+            if view:
+                view.draw({"kind": "note", "text": event["text"]})
         elif kind == "closed":                       # the server is gone: nothing works without it
             self.closed = True
             self.note("the server was stopped. start it again (python server.py), then this window")
@@ -614,6 +619,10 @@ class Gui:
             self.delete(words[1] if len(words) == 2 else self.current)
         elif command == "/stop":
             self.server.send("stop", conversation=self.current)
+        elif command == "/sandbox" and len(words) == 1:
+            self.server.send("sandbox", conversation=self.current)
+        elif command == "/sandbox" and len(words) == 3 and words[1] == "net" and words[2] in ("on", "off"):
+            self.server.send("sandbox", conversation=self.current, net=words[2])
         elif command == "/help":
             self.note(HELP)
         else:

@@ -35,6 +35,8 @@ def handle(event):
         printer.show(event)
     elif kind == "problem":                          # a request that could not be done: the server says why
         print(event["text"])
+    elif kind == "sandbox" and mine:                 # the answer to /sandbox (or another client switched the network)
+        print(event["text"])
     elif kind == "renamed":
         if event["old"] == current:                  # the one you are in has a new name from now on
             current = event["new"]
@@ -181,6 +183,13 @@ if __name__ == "__main__":                           # runs only when you start 
                 answer = server.next(0.5)            # nothing runs: the server says so right away
                 if answer is not None:
                     handle(answer)
+
+            elif what == "sandbox":                  # /sandbox, or /sandbox net on|off: the server does it, for
+                if len(words) == 3:                  # this conversation's sandbox. only you can switch the network:
+                    server.send("sandbox", conversation=current, net=words[2])   # the agent has no tool for it
+                else:
+                    server.send("sandbox", conversation=current)
+                wait_for("sandbox", "problem")       # both are printed by handle
 
             elif what == "message":
                 busy = True                          # until the server says "done" (or that it failed)

@@ -52,7 +52,8 @@ what was tried and did not work, and why, so it is not tried again
 ## Open
 what is left, and the very next step
 ## Files
-the saved results that matter (results-1, ...: read_result shows them again), and any other files
+the saved results that matter (results-1, ...: read_result shows them again), and the files, notebooks and projects
+in /workspace/... that matter, each with what it is for. (what runs in the sandbox right now is in your system prompt)
 ## Last exchange
 the user's last message and your last answer, in short"""
 
@@ -61,18 +62,22 @@ You are in the MIDDLE of a task: say exactly where you are in it, and what you w
 
 GO_ON = """[from the program, not the user] Your conversation was emptied in the middle of the task, after your
 checkpoint. Your checkpoint (in your system prompt) says where you were: go on with the task from there. Long results
-you saw before are still saved: read_result and search_result show them."""
+you saw before are still saved: read_result and search_result show them. What runs in your sandbox right now is at the
+end of your system prompt."""
 
 class Agent:
     def __init__(self, model, api_key, instructions=None, stream=False, effort=None,
                  tools=None, skills=None, conversation=None, log_file=None, results_dir=None,
-                 checkpoint_file=None, context_limit=None, output=None, name=None):
+                 checkpoint_file=None, context_limit=None, output=None, name=None, sandbox=None):
         self.output = output                   # WHERE everything the agent has to say goes: a function that takes
                                                # one event (a dict, see send). the agent never prints, and never
                                                # knows who listens: the hub (classes/hub.py) passes each event on
                                                # to the clients that have this conversation open. None = nobody
         self.name = name                       # the conversation this agent belongs to: written on every event,
                                                # so the hub knows where it goes
+        self.sandbox = sandbox                 # this conversation's own Sandbox (classes/sandbox.py): the sandbox and
+                                               # notebook tools use it. None = no sandboxes (podman missing): no
+                                               # workspace in the system prompt
         self.stop_requested = False            # set to True from outside (the hub) to stop the running task. the
                                                # agent looks at it at safe points (see check_stop). whoever starts
                                                # ask() sets it back to False first
@@ -173,6 +178,10 @@ class Agent:
             system += ("\n\nYour checkpoint: your own notes from earlier in this conversation, written before the "
                        "conversation was emptied to make room. It is where you stand.\n<checkpoint>\n"
                        + checkpoint + "\n</checkpoint>")
+        if self.sandbox:                  # 4. its workspace: what runs in its sandbox, as of now. built only when the
+                                          #    system prompt is built (a new conversation, /open, a checkpoint), so a
+                                          #    fresh context always knows it, and the cache stays valid in between
+            system += "\n\n" + self.sandbox.snapshot()
         return system.strip()             # strip: no skills and no soul -> "" -> no system message at all
 
     def refresh_system(self):

@@ -13,10 +13,13 @@ import os
 import json
 import queue
 import socket
+import atexit
+import signal
 import threading
 from config import *
 from classes.hub import Hub
 from classes.agent import Agent
+from classes.sandbox import Workspace
 from functions.read_text import read_text
 from functions.load_tools import load_tools
 from functions.load_skills import load_skills
@@ -32,7 +35,11 @@ def new_agent(name, messages=None):
                  tools=tools, skills=skills, conversation=messages,                   # in the wrong parameter
                  log_file=conversations.log_of(name), results_dir=conversations.results_of(name),
                  checkpoint_file=conversations.checkpoint_of(name), context_limit=CONTEXT_LIMIT,
-                 output=hub.event, name=name)
+                 output=hub.event, name=name,
+                 sandbox=workspace.of(name) if workspace else None)   # this conversation's own sandbox, and no other
+
+SANDBOX_TOOLS = ("sandbox", "notebook")              # the folders in tools/ that need a sandbox to do anything
+SANDBOX_SKILLS = ("sandbox", "projects", "notebook")   # and the skills that explain them
 
 
 def serve(connection, hub):
@@ -81,8 +88,6 @@ if __name__ == "__main__":                           # runs only when you start 
     if not skills:                                   # no skills: load_skill could do nothing, so the model
         tools.pop("load_skill", None)                # doesn't get it. (None: no error if it isn't there either)
 
-    hub = Hub(new_agent, {"model": MODEL, "tools": list(tools), "skills": list(skills), "limit": CONTEXT_LIMIT})
-
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     if os.name != "nt":                              # mac and linux: let a restarted server use the port right away.
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # (on windows this option would let two
@@ -92,11 +97,50 @@ if __name__ == "__main__":                           # runs only when you start 
         raise SystemExit("can't listen on " + HOST + ":" + str(PORT) + " (" + str(e) + "). is a server running "
                          "already? otherwise pick another PORT in config.py")
     listener.listen()
+                                                     # from here on this is the only server of this copy of the
+                                                     # program (a second one would not have got the port). only now
+                                                     # is anything of the sandboxes touched: a server that fails to
+                                                     # start must never remove the sandboxes of the one that runs
+
+    workspace = Workspace(HERE, SANDBOXES_DIR, FOLDERS_FILE, NOTEBOOK_ENGINE, command=CONTAINER_CMD,
+                          memory=SANDBOX_MEMORY, cpus=SANDBOX_CPUS, pids=SANDBOX_PIDS, timeout=COMMAND_TIMEOUT,
+                          rootless_only=SANDBOX_ROOTLESS_ONLY)
+    if workspace.available():
+        left = workspace.cleanup()                   # containers an earlier server left behind (a crash) go first
+        if left:
+            print("removed " + str(left) + " sandbox(es) an earlier server left behind")
+        atexit.register(workspace.shutdown)          # whatever happens (also a crash in python): every sandbox stops
+        for problem in (workspace.unusable(), workspace.folders()[1]):
+            if problem:                              # the agent is told the same when it tries to open a sandbox
+                print("sandboxes: " + problem.replace(". the user must fix it", ": fix it, no restart needed"))
+    else:                                            # no podman: the sandbox and notebook tools could do nothing,
+        workspace = None                             # so the model doesn't get them, nor the skills for them
+        for name in [n for n, tool in tools.items() if tool["folder"].split("/")[0] in SANDBOX_TOOLS]:
+            tools.pop(name)
+        for name in SANDBOX_SKILLS:
+            skills.pop(name, None)
+        print(CONTAINER_CMD + " not found or not running: no sandboxes, so the agent can't run code "
+              "(mac/windows: podman machine start, then start the server again)")
+    if not skills:                                   # the last skills may just have been dropped
+        tools.pop("load_skill", None)
+
+    hub = Hub(new_agent, {"model": MODEL, "tools": list(tools), "skills": list(skills), "limit": CONTEXT_LIMIT},
+              workspace=workspace)
+    if workspace:                                    # what a sandbox says while it works (e.g. building an image)
+        workspace.tell = lambda conversation, text: hub.event({"conversation": conversation, "kind": "note",
+                                                               "text": text})
 
     print("model: " + MODEL + " | tools: " + (", ".join(tools) or "none")
-          + " | skills: " + (", ".join(skills) or "none"))
+          + " | skills: " + (", ".join(skills) or "none")
+          + " | sandboxes: " + ((", ".join(workspace.names()) or "none") if workspace else "none"))
     print("the server listens on " + HOST + ":" + str(PORT) + ". clients: python main.py (terminal), "
           "python gui.py (window). ctrl+c stops the server\n")
+
+    def leave(number, frame):                        # the terminal was closed, or the server was asked to end
+        raise KeyboardInterrupt                      # (kill): leave the same way as with ctrl+c, so every
+    for name in ("SIGTERM", "SIGHUP"):               # sandbox is stopped. (windows has no SIGHUP: there, and after
+        if hasattr(signal, name):                    # a hard kill, the next server start removes what was left)
+            signal.signal(getattr(signal, name), leave)
 
     listener.settimeout(1)                           # accept() gives up every second, so ctrl+c is noticed (on
     try:                                             # windows it isn't while accept() waits)

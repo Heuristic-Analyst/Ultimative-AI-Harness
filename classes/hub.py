@@ -25,7 +25,10 @@
 #   stop     conversation          stop the task running in it
 #   list                           answered with "list"
 #   rename   old, new              answered with "renamed", to every client
-#   delete   conversation          answered with "deleted", to every client
+#   delete   conversation          answered with "deleted", to every client. its sandbox is stopped
+#   sandbox  conversation, net     net left out: what runs in its sandbox. net "on" / "off": switch its sandbox's
+#                                  network. only a client can do this: no tool of the agent leads here. answered
+#                                  with "sandbox"
 #
 # EVENTS, what a client gets. {"kind": ..., and its fields}. the ones the agent sends (thinking, answer, answer_end,
 # tool_call, tool_result, note: see classes/agent.py), and the hub's own:
@@ -42,6 +45,7 @@
 #   list     conversations         [{"name", "busy", "saved"}, ...]
 #   renamed  old, new, client      to every client
 #   deleted  conversation, client  to every client
+#   sandbox  conversation, text    the answer to a "sandbox" request. a switched network goes to every watcher
 
 import os
 import datetime
@@ -55,9 +59,11 @@ BUSY = ("this conversation is still working. wait until it is done, or stop it "
 
 
 class Hub:
-    def __init__(self, make_agent, about):
+    def __init__(self, make_agent, about, workspace=None):
         self.make_agent = make_agent           # a function (name, messages) -> a new Agent. server.py writes it: it
                                                # knows the model, the key, the tools and the skills
+        self.workspace = workspace             # the Workspace (classes/sandbox.py): every conversation's sandbox.
+                                               # None = no sandboxes (podman missing)
         self.about = about                     # what every client is told in "hello": model, tools, skills, limit
         self.lock = threading.RLock()          # clients and agents all run in their own threads: one at a time
                                                # changes what is below. RLock: these functions call each other
@@ -143,7 +149,14 @@ class Hub:
             if not watching:
                 del self.watchers[name]
         if name not in self.watchers and name not in self.working:
-            self.agents.pop(name, None)
+            self.forget(name)
+
+    def forget(self, name):
+        """the conversation leaves the server's memory. a sandbox that runs for it stays (and its agent gets it back
+        when the conversation is opened again); one that doesn't is forgotten too"""
+        self.agents.pop(name, None)
+        if self.workspace:
+            self.workspace.idle(name)
 
     def opened(self, client, name):
         """tell a client everything about a conversation it just opened"""
@@ -208,6 +221,19 @@ class Hub:
             elif what == "delete":
                 self.delete(client, name)
 
+            elif what == "sandbox":
+                net = request.get("net")
+                if not self.workspace:
+                    self.problem(client, "there are no sandboxes: podman was not found when the server started. "
+                                         "install it (mac/windows: podman machine start), then start the server again")
+                elif name not in self.agents or client not in self.watchers.get(name, ()):
+                    self.problem(client, "open the conversation first: every conversation has its own sandbox")
+                elif net not in (None, "on", "off"):
+                    self.problem(client, "usage: /sandbox  or  /sandbox net on|off")
+                else:                                      # in its own thread: podman can take a while (and waits
+                    threading.Thread(target=self.sandbox, args=(client, name, net),   # while the sandbox restarts),
+                                     daemon=True).start()                              # and the hub must stay awake
+
             else:
                 self.problem(client, "unknown request: " + str(what))
 
@@ -228,7 +254,28 @@ class Hub:
             self.to_all({"kind": "status", "conversation": name, "busy": True})
             self.event({"conversation": name, "kind": "user", "text": text, "client": client})
             self.say(name + ": working (message from client " + str(client) + ")")
+            notes = agent.sandbox.take_notes() if agent.sandbox else []   # what you changed with /sandbox meanwhile
+            if notes:                                      # (the network): the model is told with this message,
+                text = text + "\n\n" + "\n".join(notes)   # after your own words
             threading.Thread(target=self.work, args=(name, agent, text), daemon=True).start()
+
+    def sandbox(self, client, name, net):
+        """/sandbox, typed by a user in a client. net None: say what runs. "on" / "off": switch the network of this
+        conversation's sandbox. this is the ONLY way the network is ever switched: no tool of the agent can do it"""
+        try:
+            if net is None:
+                text = self.workspace.overview(name)
+            else:
+                text = self.workspace.of(name).user_network(net == "on")
+        except Exception as e:
+            text = "the server could not do that: " + type(e).__name__ + ": " + str(e)
+        with self.lock:
+            event = {"kind": "sandbox", "conversation": name, "text": text}
+            if net is None or client not in self.watchers.get(name, ()):
+                self.tell(client, event)                   # only you asked what runs
+            else:
+                self.to_watchers(name, event)              # a switched network: everyone who has it open sees it
+                self.say(name + ": sandbox network " + net + " asked by client " + str(client) + " -> " + text)
 
     def work(self, name, agent, text):
         """one task, in its own thread: the agent's whole loop, until it has answered. everything it has to say
@@ -249,7 +296,7 @@ class Hub:
                                     "tokens": agent.tokens, "limit": agent.context_limit})   # of a task
             self.say(name + ": done")
             if name not in self.watchers:                  # nobody has it open anymore: out of memory
-                self.agents.pop(name, None)
+                self.forget(name)
 
     def rename(self, client, old, new):
         if not isinstance(old, str) or not isinstance(new, str):
@@ -275,6 +322,8 @@ class Hub:
             agent.results_dir = conversations.results_of(new)
             agent.checkpoint_file = conversations.checkpoint_of(new)
             self.agents[new] = agent
+        if self.workspace:                                 # its sandbox, running or not, goes with it
+            self.workspace.rename(old, new)
         if old in self.watchers:
             self.watchers[new] = self.watchers.pop(old)
         self.to_all({"kind": "renamed", "old": old, "new": new, "client": client})
@@ -290,6 +339,9 @@ class Hub:
                 return self.problem(client, problem)
         self.agents.pop(name, None)
         self.watchers.pop(name, None)
+        if self.workspace:                                 # its sandbox is stopped (the container is deleted, the
+            threading.Thread(target=self.workspace.remove, args=(name,), daemon=True).start()   # folders stay). in
+                                                           # its own thread: stopping takes a few seconds
         self.to_all({"kind": "deleted", "conversation": name, "client": client})
 
     # --- the server's own terminal ---
@@ -305,3 +357,6 @@ class Hub:
         with self.lock:
             for name in self.working:
                 self.say(name + ": cut off in the middle of a task (its log.jsonl has everything it said)")
+        if self.workspace:                                 # outside the lock: stopping takes a few seconds each
+            self.say("stopping the sandboxes")
+            self.workspace.shutdown()

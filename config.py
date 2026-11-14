@@ -12,6 +12,24 @@ SKILLS_DIR = os.path.join(HERE, "skills")            # skills/<name>/SKILL.md = 
 CONVERSATIONS_DIR = os.path.join(HERE, "Conversations")   # Conversations/<name>/state.json = one conversation each
                                                           # (see functions/conversations.py). created with the first one
 
+SANDBOXES_DIR = os.path.join(HERE, "Sandboxes")      # Sandboxes/<name>/Containerfile = one sandbox each (classes/sandbox.py)
+FOLDERS_FILE = os.path.join(HERE, "settings", "folders.json")   # the ONLY folders of your computer a sandbox can see:
+                                                     # which ones, under which name, read-only or read-write. you
+                                                     # write it (see settings/README.md and functions/folders.py)
+NOTEBOOK_ENGINE = "Notebook_Engine"                  # the NAME (in folders.json) of the folder with the notebook
+                                                     # engine. the nb_* tools find it by this name
+
+# Sandbox (see classes/sandbox.py). limits for a running sandbox, so a runaway script can't take your computer down.
+# one sandbox can have its own memory: Sandboxes/<name>/sandbox.json (see Sandboxes/README.md)
+CONTAINER_CMD = "podman"   # the container program. podman is rootless: "root" inside the sandbox is just you outside
+SANDBOX_ROOTLESS_ONLY = True   # True: no sandbox starts when podman runs with root rights (then "root" inside would
+                           # be the real root). False only for a podman machine (mac, windows) you set up as rootful
+SANDBOX_MEMORY = "2g"      # memory a sandbox may use
+SANDBOX_CPUS = "2"         # CPU cores a sandbox may use
+SANDBOX_PIDS = 2048        # processes (and threads) a sandbox may have at once. stops a runaway script that copies
+                           # itself; pytorch alone uses several hundred threads
+COMMAND_TIMEOUT = 600      # seconds a command in the sandbox (sandbox_shell, a notebook call) may run, then it is stopped
+
 # The server (server.py): the one program that holds the agents. every other program (main.py in a terminal, gui.py
 # in a window, later e.g. a telegram bot) is a client that connects to it here
 HOST = "127.0.0.1"         # 127.0.0.1 = only programs on this computer can connect, nothing from the network
